@@ -110,7 +110,7 @@ resource "aws_instance" "bark_service" {
   # But in this package we assume user will upload files to the instance or to an accessible git repo.
 
   # If git repo is provided, clone it (replace <your-git> if you use GitHub)
-  # git clone https://github.com/<your-repo>/bark-service.git . || true
+  # git clone https://github.com/pasichnikroman/-barktest.git . || true
 
   # Build Docker image from local files (if present)
   if [ -f Dockerfile ]; then
