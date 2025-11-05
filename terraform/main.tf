@@ -14,12 +14,7 @@ provider "aws" {
 
 resource "aws_s3_bucket" "bark_outputs" {
   bucket = var.s3_bucket_name
-  acl    = "public-read"
   force_destroy = true
-
-  versioning {
-    enabled = false
-  }
 
   server_side_encryption_configuration {
     rule {
@@ -29,6 +24,14 @@ resource "aws_s3_bucket" "bark_outputs" {
     }
   }
 }
+# S3 versioning (replacement for deprecated versioning block)
+resource "aws_s3_bucket_versioning" "bark_outputs_versioning" {
+  bucket = aws_s3_bucket.bark_outputs.id
+  versioning_configuration {
+    status = "Suspended"  # Change to "Enabled" if you want versioning on
+  }
+}
+
 
 resource "aws_security_group" "bark_sg" {
   name        = "bark-service-sg"
@@ -91,14 +94,24 @@ resource "aws_instance" "bark_service" {
   sudo systemctl start docker
   sudo usermod -a -G docker ec2-user
 
-  # Install NVIDIA drivers and nvidia-docker2
-  # (This uses the NVIDIA repo; on some AMIs drivers may be preinstalled.)
-  distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
-  curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo rpm --import -
-  curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo
-  sudo yum clean expire-cache
-  sudo yum install -y nvidia-docker2
-  sudo systemctl restart docker || true
+  ## Install NVIDIA drivers and nvidia-docker2
+distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
+echo "Detected distribution: $distribution"
+
+set +e
+curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey -o /tmp/nvidia.gpg
+if [ $? -ne 0 ]; then
+  echo "⚠️ Failed to download NVIDIA GPG key. Skipping import."
+else
+  sudo rpm --import /tmp/nvidia.gpg
+fi
+set -e
+
+curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo || true
+sudo yum clean expire-cache
+sudo yum install -y nvidia-docker2 || true
+sudo systemctl restart docker || true
+
 
   # Create app dir and switch ownership
   sudo mkdir -p /home/ec2-user/bark
@@ -131,6 +144,6 @@ data "aws_ami" "default" {
   owners      = ["amazon"]
   filter {
     name   = "name"
-    values = ["amzn2-ami-hvm-*-gp2"]
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"] # <-- x86_64 AMI for GPU instances
   }
 }
