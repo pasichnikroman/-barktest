@@ -95,6 +95,10 @@ resource "aws_instance" "bark_service" {
   sudo usermod -a -G docker ec2-user
 
   ## Install NVIDIA drivers and nvidia-docker2
+
+  sudo amazon-linux-extras enable gpu
+  sudo yum install -y nvidia-driver-latest-dkms
+
 distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
 echo "Detected distribution: $distribution"
 
@@ -107,10 +111,13 @@ else
 fi
 set -e
 
-curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo || true
-sudo yum clean expire-cache
-sudo yum install -y nvidia-docker2 || true
-sudo systemctl restart docker || true
+
+sudo yum update -y
+sudo yum install -y kernel-devel-$(uname -r) kernel-headers-$(uname -r) gcc make
+curl -s -L https://nvidia.github.io/nvidia-docker/amzn2/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo
+sudo yum install -y nvidia-driver-latest-dkms nvidia-container-toolkit
+sudo systemctl restart docker
+
 
 
   # Create app dir and switch ownership
