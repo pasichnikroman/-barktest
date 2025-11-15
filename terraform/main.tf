@@ -78,68 +78,72 @@ resource "aws_instance" "bark_service" {
     delete_on_termination = true
   }
 
-  user_data = <<-EOF
-  #!/bin/bash
-  set -ex
+ user_data = <<-EOF
+#!/bin/bash
+set -ex
 
-  # Run as ec2-user (Amazon Linux)
-  cd /home/ec2-user
+cd /home/ec2-user
 
-  # Install updates and prerequisites
-  sudo yum update -y
-  sudo yum install -y docker git unzip amazon-linux-extras python3
-
-  # Enable docker
-  sudo systemctl enable docker
-  sudo systemctl start docker
-  sudo usermod -a -G docker ec2-user
-
-  ## Install NVIDIA drivers and nvidia-docker2
-
-  sudo amazon-linux-extras enable gpu
-  sudo yum install -y nvidia-driver-latest-dkms
-
-distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
-echo "Detected distribution: $distribution"
-
-set +e
-curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey -o /tmp/nvidia.gpg
-if [ $? -ne 0 ]; then
-  echo "⚠️ Failed to download NVIDIA GPG key. Skipping import."
-else
-  sudo rpm --import /tmp/nvidia.gpg
-fi
-set -e
-
-
+# Install base packages
 sudo yum update -y
-sudo yum install -y kernel-devel-$(uname -r) kernel-headers-$(uname -r) gcc make
-curl -s -L https://nvidia.github.io/nvidia-docker/amzn2/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo
-sudo yum install -y nvidia-driver-latest-dkms nvidia-container-toolkit
+sudo yum install -y docker git unzip python3 gcc make kernel-devel-$(uname -r) kernel-headers-$(uname -r)
+
+# Enable and start Docker
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker ec2-user
+
+#############################################
+# INSTALL NVIDIA DRIVER + NVIDIA DOCKER RUNTIME
+#############################################
+
+# Add NVIDIA docker repo (correct for Amazon Linux 2)
+curl -s -L https://nvidia.github.io/nvidia-container-runtime/amzn2/nvidia-container-runtime.repo \
+  | sudo tee /etc/yum.repos.d/nvidia-container-runtime.repo
+
+# Install container runtime + driver metapackage
+sudo yum install -y nvidia-container-runtime nvidia-driver-latest-dkms
+
+# Configure Docker to use NVIDIA runtime
+sudo tee /etc/docker/daemon.json > /dev/null <<EOT
+{
+  "default-runtime": "nvidia",
+  "runtimes": {
+    "nvidia": {
+      "path": "/usr/bin/nvidia-container-runtime",
+      "runtimeArgs": []
+    }
+  }
+}
+EOT
+
 sudo systemctl restart docker
 
+#############################################
+# DEPLOY BARK APP
+#############################################
+sudo mkdir -p /home/ec2-user/bark
+sudo chown ec2-user:ec2-user /home/ec2-user/bark
+cd /home/ec2-user/bark
 
+# Clone repo
+git clone https://github.com/pasichnikroman/-barktest.git . || true
 
-  # Create app dir and switch ownership
-  sudo mkdir -p /home/ec2-user/bark
-  sudo chown ec2-user:ec2-user /home/ec2-user/bark
-  cd /home/ec2-user/bark
+# Build image if Dockerfile exists
+if [ -f Dockerfile ]; then
+  sudo docker build -t bark-service . || true
+fi
 
-  # Place minimal files (we'll pull the full app from S3 or you can SCP them)
-  # For convenience, we will download the Dockerfile and app from a temporary bundle if provided
-  # But in this package we assume user will upload files to the instance or to an accessible git repo.
+# Run Bark GPU container
+sudo docker run -d --restart always --gpus all \
+  -p 5000:5000 \
+  -e S3_BUCKET=${var.s3_bucket_name} \
+  -e AWS_REGION=${var.aws_region} \
+  --name bark-service \
+  bark-service || true
 
-  # If git repo is provided, clone it (replace <your-git> if you use GitHub)
-  git clone https://github.com/pasichnikroman/-barktest.git . || true
+EOF
 
-  # Build Docker image from local files (if present)
-  if [ -f Dockerfile ]; then
-    sudo docker build -t bark-service . || true
-  fi
-
-  # Run the container (bind to 0.0.0.0:5000) with GPU support
-  sudo docker run -d --restart always --gpus all -p 5000:5000 -e S3_BUCKET={"${var.s3_bucket_name}"} -e AWS_REGION={"${var.aws_region}"} --name bark-service bark-service || true
-  EOF
 
   tags = {
     Name = "Bark-GPU-Service"
